@@ -13,6 +13,7 @@
 #
 
 # region Import region
+import os
 import argparse
 import subprocess
 import logging
@@ -30,6 +31,7 @@ __version__ = '1.0'  # version of script
 DFU_BUILD_UTILITY = 'dfu_util.pl'
 DFU_BUILD_CONFIG = 'serial_number.cfg'
 CABLE_VID_PIDS_DICT = {'ure': '1901:0020', 'utt': '1901:002f', 'upp12': '1901:0029'}
+CABLE_DFU_VER_DICT = {'ure': '1901:0020', 'utt': 'U-TT_MT7637_V1', 'upp12': 'U-PP_MT7637_V1'}
 SERIAL_NUMBER_SIZE = 100    # maximum number of characters allowed in a ACM cable
 DNLD_LIST = ['BootLoader', 'DFU', 'COMProcessor', 'ACQProcessor']
 # endregion
@@ -75,7 +77,7 @@ def create_serialnumber():
 def build_dfu(dfu_list):
     """
     Take the give list and build a DFU file.  The given DFU list contains the elements to build the DFU with.
-    :param dfu_list: 
+    :param dfu_list:
     :return:
     """
 
@@ -150,63 +152,99 @@ def main(arg_list=None):
 
         ################################################################################################################
         # build a serial number DFU
+        print('')
+        print('Programming cable with serial number: '+serial_number)
         dfu_filename = 'sn_'+cable_type+'_'+serial_number+'.dfu'
         command_to_execute=['perl', DFU_BUILD_UTILITY, '-s '+serial_number, '-a'+cable_type, '-o '+dfu_filename, '-v']
-        print('Command: '+str(command_to_execute))
         command_result_sting = execute_command(command_to_execute)
 
-        print('The Serial number is: '+serial_number)
-        print('Command results was: '+command_result_sting)
+        # If verbose, print command and command results...
+        if args.verbose is True:
+            print('')
+            print('*************************************************')
+            print('Command : '+str(command_to_execute))
+            print('command_result_string :'+str(command_result_string))
+            print('')
 
         ################################################################################################################
         # Program the ACM with that serial number
-        command_to_execute = ['dfu-util', '-v',
+        command_to_execute = ['dfu-util',
             '-d '+CABLE_VID_PIDS_DICT[cable_type]+','+CABLE_VID_PIDS_DICT[cable_type],
-            ' -D '+dfu_filename]
-        command_result_sting = execute_command(command_to_execute)
+            '-D'+dfu_filename]
+        command_result_string = execute_command(command_to_execute)
 
-        print('Command results was: '+command_result_sting)
 
+        # If verbose, print command and command results...
+        if args.verbose is True:
+            print('')
+            print('*************************************************')
+            print('Command : '+str(command_to_execute))
+            print('command_result_string :'+str(command_result_string))
+            print('')
+
+        print('Sleeping...')
         sleep(5)    # wait for cable to reset and enumerate...
+
+        print('Testing cable for expected serial number')
 
         ################################################################################################################
         # Get enumeration info of just programmed cable...
         command_to_execute = ['lsusb', '-v', '-d '+CABLE_VID_PIDS_DICT[cable_type]]
-        command_result_sting = execute_command(command_to_execute)
+        command_result_string = execute_command(command_to_execute)
+
+        # If verbose, print command and command results...
+        if args.verbose is True:
+            print('')
+            print('*************************************************')
+            print('Command : '+str(command_to_execute))
+            print('command_result_string :'+str(command_result_string))
+            print('')
 
         ################################################################################################################
-        # and verify the serial number reported by the cable matches what was programmed...
+        # Create list of string from lsusb output.
+        lsusb_list = [s.strip() for s in command_result_string.splitlines()]
 
-
-        '''
-        # Verify the serial number was programmed into the cable.
-        command_result_sting = execute_command(['lsusb', '-v', '-d '+CABLE_VID_PIDS_DICT[cable_type]])
-
-        # Attempt to capture all 3 string descriptor.
-        lsusb_output = [s.strip() for s in command_result_sting.splitlines()]
-        string_descriptors = [s for s in lsusb_output if s.startswith('iManufacture') or
+        ################################################################################################################
+        # Get the string description we are interested in...
+        string_descriptor_list = [s for s in lsusb_list if s.startswith('iManufacture') or
              s.startswith('iProduct') or
              s.startswith('iSerial')]
 
         # Verify we got 3 hits...
-        if len(string_descriptors) != 3:
+        if len(string_descriptor_list) != 3:
             # We did not get 3 hits as expected, something is wrong...
             print('Did NOT find iManufacture or iProduct or iSerial in lsusb output')
-            print('Found this: ', string_descriptors)
+            print('Found this: ', str(string_descriptor_list))
             exit()
-        '''
-
 
         # Verify iManufacture is correct...
+        manfac = string_descriptor_list[0].split()
+        if manfac[0] != 'iManufacturer' or manfac[1] != '1' or manfac[2] != 'GE' or manfac[3] != 'Healthcare':
+            print('String descriptor iManufacturer does not match expected')
+            print(str(manfac))
+            exit(1)
 
         # Verify iProduct is correct...
+        product = string_descriptor_list[1].split()
+        if product[0] != 'iProduct' or product[1] != '2' or product[2] != CABLE_DFU_VER_DICT[cable_type]:
+            print('String descriptor iProduct does not match expected')
+            print(str(product))
+            exit(1)
 
         # Verify iSerial is correct...
+        serial = string_descriptor_list[2].split()
+        if serial[0] != 'iSerial' or serial[1] != '3' or serial[2] != serial_number:
+            print('String descriptor iSerial does not match expected')
+            print(str(serial))
+            print('Expected serial number : '+serial_number)
+            exit(1)
 
+        # Remove the serial number DFU...
+        print('`PASS')
+        os.remove(dfu_filename)
 
-
-
-    return 1
+    print('**************** ALL PASS ****************')
+    return 0
 
 # endregion
 
