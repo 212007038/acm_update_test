@@ -14,6 +14,7 @@
 
 # region Import region
 import os
+import datetime
 import argparse
 import subprocess
 import logging
@@ -33,7 +34,8 @@ DFU_BUILD_CONFIG = 'serial_number.cfg'
 CABLE_VID_PIDS_DICT = {'ure': '1901:0020', 'utt': '1901:002f', 'upp12': '1901:0029'}
 CABLE_DFU_VER_DICT = {'ure': '1901:0020', 'utt': 'U-TT_MT7637_V1', 'upp12': 'U-PP_MT7637_V1'}
 SERIAL_NUMBER_SIZE = 100    # maximum number of characters allowed in a ACM cable
-DNLD_LIST = ['BootLoader', 'DFU', 'COMProcessor', 'ACQProcessor']
+DNLD_LIST = ['BootLoader', 'COMProcessor', 'ACQProcessor']
+DFU_DIRECTORY = 'none'
 # endregion
 
 ###############################################################################
@@ -74,12 +76,90 @@ def create_serialnumber():
     serial_number = ''.join([random.choice(string.ascii_letters + string.digits) for n in range(serial_number_length)])
     return serial_number
 
-def build_dfu(dfu_list):
+
+def create_dfu(dfu_list):
     """
     Take the give list and build a DFU file.  The given DFU list contains the elements to build the DFU with.
     :param dfu_list:
     :return:
     """
+
+def create_dfu_config_root(package_version, vendor_id, product_id):
+    """
+    Create the root block for a DFU configuration file.
+    :param load_list: list of DFU load items to build list with.
+    :param dfu_directory: directory to search for DFU files.
+    :return:
+    """
+    root_list = [  # start of images list build.
+        '# Root block',
+        '# versions must be proper (per spec).',
+        '# Note the vendor and product IDs get placed in the DFU suffix where',
+        '# DFU download utilities will read them during attempted downloads.'
+    ]
+    root_list.append('package_version = 0x{0:08x}'.format(package_version))
+    root_list.append('compatibility_version = 0x0102')
+    root_list.append('vendor_id = 0x{0:04x}'.format(vendor_id))
+    root_list.append('product_id = 0x{0:04x}'.format(product_id))
+
+    return root_list
+
+
+def create_dfu_config_images(load_list, dfu_directory):
+    """
+    Create a random DFU configuration images list.  Files names are pulled from the given directory.
+    :param load_list: list of DFU load items to build list with.
+    :param dfu_directory: directory to search for DFU files.
+    :return:
+    """
+    # Build the images list...
+    i = 1            # keep track of what download item we are on
+    images_list = [  # start of images list build.
+        '# Images block',
+        '# Associate image names and image binaries.',
+        '# Image name must be proper (per spec).',
+        '[images]'
+    ]
+
+    for item in load_list:
+        search_directory = dfu_directory+'/'+item  # build directory to search for DFU file in
+        files = [f for f in os.listdir(search_directory) if os.path.isfile(search_directory+'/'+f)]  # grab all the files in the directory
+        load_string = '{0:d}_{1:s} = {2:s}'.format(i, item, search_directory+'/'+random.choice(files))
+        images_list.append(load_string)  # append built item
+        i += 1
+
+    return images_list
+
+
+def create_dfu_config(package_version, product_id, dfu_directory):
+    """
+    Create a random DFU configuration file.  This will be used to build a DFU for download to a cable.
+    :return:
+    """
+    # Build header list
+    header_list = [
+        '#',
+        '# DFU Configuration File for active cable firmware upgrade.',
+        '#',
+        '# Generated on {0:s}'.format(datetime.datetime.now().isoformat()),
+        '#',
+        '#'
+    ]
+
+    # Build the root content
+    root_list = create_dfu_config_root(package_version, 0x1901, product_id)
+
+    # Build a random load list...
+    load_list = [random.choice(DNLD_LIST) for i in range(random.randint(1, 10))]
+    images_list = create_dfu_config_images(load_list, dfu_directory)
+
+    # Concatenate everything in the right order...
+    dfu_list = header_list + root_list + ['', ''] + images_list
+
+    return dfu_list
+
+
+
 
 def print_console_and_log(message):
     """
@@ -117,7 +197,10 @@ def main(arg_list=None):
     ###############################################################################
     # Setup command line argument parsing...
     parser = argparse.ArgumentParser(description='ACM software download test script')
-    parser.add_argument('-c', dest='cable_type', help='Cable type, upp or utt or ure', required=True)
+    parser.add_argument('-c', dest='cable_type',
+                        help='Cable type, upp or utt or ure', required=True)
+    parser.add_argument('-d', dest='dfu_directory',
+                        help='Top level directory where DFU files to download reside', required=True)
     parser.add_argument('--log', dest='loglevel', default='INFO', required=False,
                         help='logging level for log file')
     parser.add_argument('-v', dest='verbose', default=False, action='store_true',
@@ -145,6 +228,14 @@ def main(arg_list=None):
         print('Bad cable type given: '+cable_type+' should be one of '+str(list(CABLE_VID_PIDS_DICT.keys())))
         exit(-1)
 
+    # Test existence of DFU top level directory
+    if os.path.isdir(args.dfu_directory) is False:
+        print('ERROR, ' + args.dfu_directory + ' is not a directory')
+        print('\n\n')
+        exit(-1)
+
+    DFU_DIRECTORY = args.dfu_directory
+
     # endregion
 
     for i in range(100):
@@ -156,7 +247,7 @@ def main(arg_list=None):
         print('Programming cable with serial number: '+serial_number)
         dfu_filename = 'sn_'+cable_type+'_'+serial_number+'.dfu'
         command_to_execute=['perl', DFU_BUILD_UTILITY, '-s '+serial_number, '-a'+cable_type, '-o '+dfu_filename, '-v']
-        command_result_sting = execute_command(command_to_execute)
+        command_result_string = execute_command(command_to_execute)
 
         # If verbose, print command and command results...
         if args.verbose is True:
